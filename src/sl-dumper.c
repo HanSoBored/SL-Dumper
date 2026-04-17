@@ -453,31 +453,8 @@ void print_banner() {
 
 #ifndef UNITY_TEST
 
-// Check if root directory contains .so files
-static int has_so_in_root(const char *path) {
-    DIR *d = opendir(path);
-    if (!d) return 0;
-    struct dirent *dir;
-    while ((dir = readdir(d)) != NULL) {
-        if (strstr(dir->d_name, ".so") != NULL) {
-            closedir(d);
-            return 1;
-        }
-    }
-    closedir(d);
-    return 0;
-}
-
 int main() {
     print_banner();
-
-    // Reject .so files in root directory
-    if (has_so_in_root(".")) {
-        printf(C_ERR " Error: .so files found in project root.\n" C_RST);
-        printf(C_DIM " Please move them to lib/ directory:\n" C_RST);
-        printf(C_DIM "   mkdir -p lib && mv *.so lib/\n" C_RST);
-        return 1;
-    }
 
     // 1. Cari File .so di lib/ directory
     // M3: Dynamic allocation instead of fixed array

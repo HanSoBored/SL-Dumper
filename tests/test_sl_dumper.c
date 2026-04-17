@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include "vendor/unity/unity.h"
 
@@ -9,7 +10,23 @@
 #endif
 #include "../src/sl-dumper.c" // NOLINT(bugprone-suspicious-include)
 
-static const char *TEST_SO_FILE = "lib/libcocos2dlua.so";
+static const char *find_test_so_file(void) {
+    static char path[512];
+    DIR *d = opendir("lib");
+    if (!d) return NULL;
+    struct dirent *dir;
+    while ((dir = readdir(d)) != NULL) {
+        if (strstr(dir->d_name, ".so") != NULL) {
+            snprintf(path, sizeof(path), "lib/%s", dir->d_name);
+            closedir(d);
+            return path;
+        }
+    }
+    closedir(d);
+    return NULL;
+}
+
+#define TEST_SO_FILE (find_test_so_file())
 
 void setUp(void) {
     free(symbols);
