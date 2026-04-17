@@ -5,9 +5,9 @@
 #include "vendor/unity/unity.h"
 
 #define UNITY_TEST
-#include "../sl-dumper.c"
+#include "../src/sl-dumper.c"
 
-static const char *TEST_SO_FILE = "libcocos2dlua.so";
+static const char *TEST_SO_FILE = "lib/libcocos2dlua.so";
 
 void setUp(void) {
     free(symbols);
@@ -224,7 +224,7 @@ void test_process_elf_symbols_have_valid_offsets(void) {
 
 static void write_output_file(const char *base_name) {
     char out_dir[512], out_file[1024];
-    snprintf(out_dir, sizeof(out_dir), "%s@dump", base_name);
+    snprintf(out_dir, sizeof(out_dir), "lib/output/%s@dump", base_name);
     mkdir(out_dir, 0755);
     snprintf(out_file, sizeof(out_file), "%s/%s.cpp", out_dir, base_name);
 
@@ -262,11 +262,11 @@ void test_output_file_generated(void) {
     write_output_file("test_output");
 
     struct stat out_st;
-    TEST_ASSERT_EQUAL(0, stat("test_output@dump/test_output.cpp", &out_st));
+    TEST_ASSERT_EQUAL(0, stat("lib/output/test_output@dump/test_output.cpp", &out_st));
     TEST_ASSERT(out_st.st_size > 0);
 
-    remove("test_output@dump/test_output.cpp");
-    rmdir("test_output@dump");
+    remove("lib/output/test_output@dump/test_output.cpp");
+    rmdir("lib/output/test_output@dump");
 }
 
 void test_output_contains_class_structure(void) {
@@ -296,8 +296,8 @@ void test_output_contains_class_structure(void) {
     TEST_ASSERT_NOT_NULL(strstr(buf, "attack(int)"));
     TEST_ASSERT_NOT_NULL(strstr(buf, "spawn()"));
 
-    remove("test_structure@dump/test_structure.cpp");
-    rmdir("test_structure@dump");
+    remove("lib/output/test_structure@dump/test_structure.cpp");
+    rmdir("lib/output/test_structure@dump");
 }
 
 void test_output_contains_offsets(void) {
@@ -316,8 +316,8 @@ void test_output_contains_offsets(void) {
 
     TEST_ASSERT_NOT_NULL(strstr(buf, "0xdead"));
 
-    remove("test_offsets@dump/test_offsets.cpp");
-    rmdir("test_offsets@dump");
+    remove("lib/output/test_offsets@dump/test_offsets.cpp");
+    rmdir("lib/output/test_offsets@dump");
 }
 
 /* ============================================================

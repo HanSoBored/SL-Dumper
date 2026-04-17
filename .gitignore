@@ -1,7 +1,9 @@
-*.so
-*@dump
-dumper
-sl-dumper
-*.bak
+# Build artifacts
 build/
-test_runner
+*.bak
+
+# Library files
+lib/*.so
+
+# Dump output
+*@dump/

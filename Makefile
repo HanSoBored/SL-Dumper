@@ -6,7 +6,7 @@ LDFLAGS = -lstdc++
 
 BUILDDIR = build
 TARGET = $(BUILDDIR)/sl-dumper
-SRC = sl-dumper.c
+SRC = src/sl-dumper.c
 
 PREFIX ?= /usr/local
 BINDIR = $(PREFIX)/bin
