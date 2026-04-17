@@ -2,3 +2,4 @@
 *@dump
 dumper
 *.bak
+tests/test
