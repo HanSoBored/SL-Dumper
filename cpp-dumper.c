@@ -45,6 +45,17 @@ char* __cxa_demangle(const char* mangled_name, char* output_buffer, size_t* leng
 #define UI_EXEC_TIME      "Execution time"
 
 // --- Data Structures ---
+typedef enum {
+    LIB_UNKNOWN,
+    LIB_CXX,
+    LIB_RUST,
+    LIB_GO,
+    LIB_SWIFT
+} LibraryType;
+
+// Pre-declare quick_scan_elf for forward reference
+LibraryType quick_scan_elf(const char *lib_path);
+
 typedef struct {
     uint64_t offset;
     char *class_name;
@@ -54,6 +65,14 @@ typedef struct {
 Symbol *symbols = NULL;
 size_t sym_count = 0;
 size_t sym_capacity = 0;
+
+LibraryType detected_lib = LIB_UNKNOWN;
+
+// Library type detection counters
+static int lib_counts[5] = {0, 0, 0, 0, 0};
+
+// Library type string mapping
+static const char *lib_type_str[] = {"Unknown", "C++", "Rust", "Go", "Swift"};
 
 void clear_screen() {
     printf("\x1b[1;1H\x1b[2J");
@@ -134,6 +153,13 @@ void process_elf(const char *lib_path) {
     uint8_t *mem = (uint8_t *)mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
 
+    // PE/Windows DLL detection
+    if (mem[0] == 'M' && mem[1] == 'Z') {
+        printf(C_ERR " Error: PE/DLL file detected. This tool supports ELF only.\n" C_RST);
+        munmap(mem, st.st_size);
+        exit(1);
+    }
+
     if (mem == MAP_FAILED || mem[0] != 0x7f || mem[1] != 'E' || mem[2] != 'L' || mem[3] != 'F') {
         printf(C_ERR " " UI_NOT_VALID_ELF "\n" C_RST);
         exit(1);
@@ -203,6 +229,19 @@ void process_elf(const char *lib_path) {
         if (ELF32_ST_TYPE(st_info) != STT_FUNC && ELF32_ST_TYPE(st_info) != STT_OBJECT) continue;
 
         const char *name = strtab + st_name;
+
+        // Library type detection based on symbol patterns
+        if (strncmp(name, "_Z", 2) == 0) {
+            lib_counts[LIB_CXX]++;  // C++ mangled symbol
+        } else if (strncmp(name, "rust_", 5) == 0) {
+            lib_counts[LIB_RUST]++;  // Rust symbol
+        } else if (strncmp(name, "runtime.", 8) == 0 || strncmp(name, "go.", 3) == 0) {
+            lib_counts[LIB_GO]++;  // Go symbol
+        } else if (strncmp(name, "$s", 2) == 0 || strncmp(name, "swift_", 6) == 0) {
+            lib_counts[LIB_SWIFT]++;  // Swift symbol
+        }
+
+        // Demangle and store C++ symbols
         if (strncmp(name, "_Z", 2) == 0) {
             int status = -1;
             char *demangled = __cxa_demangle(name, NULL, NULL, &status);
@@ -212,7 +251,142 @@ void process_elf(const char *lib_path) {
             }
         }
     }
+
+    // Determine final library type based on highest count
+    int max_idx = 0;
+    for (int i = 1; i < 5; i++) {
+        if (lib_counts[i] > lib_counts[max_idx]) {
+            max_idx = i;
+        }
+    }
+    if (lib_counts[max_idx] > 0) {
+        detected_lib = (LibraryType)max_idx;
+    }
+
     munmap(mem, st.st_size);
+}
+
+// Quick scan ELF to detect library type (scans first ~100 symbols only)
+LibraryType quick_scan_elf(const char *lib_path) {
+    int fd = open(lib_path, O_RDONLY);
+    if (fd < 0) return LIB_UNKNOWN;
+
+    struct stat st;
+    fstat(fd, &st);
+    uint8_t *mem = (uint8_t *)mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+
+    if (mem == MAP_FAILED || mem[0] != 0x7f || mem[1] != 'E' || mem[2] != 'L' || mem[3] != 'F') {
+        munmap(mem, st.st_size);
+        return LIB_UNKNOWN;
+    }
+
+    // Check for PE/DLL (MZ header) which is not ELF
+    if (mem[0] == 'M' && mem[1] == 'Z') {
+        munmap(mem, st.st_size);
+        return LIB_UNKNOWN;
+    }
+
+    bool is_64 = (mem[4] == ELFCLASS64);
+
+    // Pointer to common ELF structures
+    Elf64_Ehdr *ehdr64 = (Elf64_Ehdr *)mem;
+    Elf32_Ehdr *ehdr32 = (Elf32_Ehdr *)mem;
+
+    uint64_t shoff = is_64 ? ehdr64->e_shoff : ehdr32->e_shoff;
+    uint16_t shnum = is_64 ? ehdr64->e_shnum : ehdr32->e_shnum;
+
+    const uint8_t *symtab = NULL;
+    const char *strtab = NULL;
+    uint64_t sym_size = 0, sym_ent = 0;
+
+    // Find Dynamic Symbols Table (.dynsym) and String Table (.dynstr)
+    for (int i = 0; i < shnum; i++) {
+        uint32_t sh_type = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_type
+                                 : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_type;
+
+        if (sh_type == SHT_DYNSYM) {
+            symtab = mem + (is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_offset
+                                  : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_offset);
+            sym_size = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_size
+                             : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_size;
+            sym_ent = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_entsize
+                            : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_entsize;
+
+            uint32_t link = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_link
+                                  : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_link;
+
+            strtab = (const char *)(mem + (is_64 ? ((Elf64_Shdr *)(mem + shoff + link * sizeof(Elf64_Shdr)))->sh_offset
+                                                 : ((Elf32_Shdr *)(mem + shoff + link * sizeof(Elf32_Shdr)))->sh_offset));
+            break;
+        }
+    }
+
+    if (!symtab || !strtab) {
+        munmap(mem, st.st_size);
+        return LIB_UNKNOWN;
+    }
+
+    // Avoid division by zero
+    if (sym_ent == 0) {
+        munmap(mem, st.st_size);
+        return LIB_UNKNOWN;
+    }
+
+    // Quick scan only first 100 symbols
+    int scan_count = sym_size / sym_ent;
+    if (scan_count > 100) scan_count = 100;
+
+    int quick_counts[5] = {0, 0, 0, 0, 0};
+
+    for (int i = 0; i < scan_count; i++) {
+        uint64_t st_value;
+        uint32_t st_name;
+        unsigned char st_info;
+
+        if (is_64) {
+            Elf64_Sym *sym = (Elf64_Sym *)(symtab + i * sym_ent);
+            st_value = sym->st_value;
+            st_name = sym->st_name;
+            st_info = sym->st_info;
+        } else {
+            Elf32_Sym *sym = (Elf32_Sym *)(symtab + i * sym_ent);
+            st_value = sym->st_value;
+            st_name = sym->st_name;
+            st_info = sym->st_info;
+        }
+
+        if (st_value == 0) continue;
+        if (ELF32_ST_TYPE(st_info) != STT_FUNC && ELF32_ST_TYPE(st_info) != STT_OBJECT) continue;
+
+        const char *name = strtab + st_name;
+
+        // Library type detection based on symbol patterns
+        if (strncmp(name, "_Z", 2) == 0) {
+            quick_counts[LIB_CXX]++;
+        } else if (strncmp(name, "rust_", 5) == 0) {
+            quick_counts[LIB_RUST]++;
+        } else if (strncmp(name, "runtime.", 8) == 0 || strncmp(name, "go.", 3) == 0) {
+            quick_counts[LIB_GO]++;
+        } else if (strncmp(name, "$s", 2) == 0 || strncmp(name, "swift_", 6) == 0) {
+            quick_counts[LIB_SWIFT]++;
+        }
+    }
+
+    // Determine final library type based on highest count
+    int max_idx = 0;
+    for (int i = 1; i < 5; i++) {
+        if (quick_counts[i] > quick_counts[max_idx]) {
+            max_idx = i;
+        }
+    }
+
+    munmap(mem, st.st_size);
+
+    if (quick_counts[max_idx] > 0) {
+        return (LibraryType)max_idx;
+    }
+    return LIB_UNKNOWN;
 }
 
 void print_banner() {
@@ -228,6 +402,7 @@ int main() {
     DIR *d;
     struct dirent *dir;
     char *so_files[100];
+    LibraryType lib_types[100];
     int file_count = 0;
 
     d = opendir(".");
@@ -235,6 +410,7 @@ int main() {
         while ((dir = readdir(d)) != NULL) {
             if (strstr(dir->d_name, ".so") != NULL && file_count < 100) {
                 so_files[file_count] = strdup(dir->d_name);
+                lib_types[file_count] = LIB_UNKNOWN;
                 file_count++;
             }
         }
@@ -246,9 +422,14 @@ int main() {
         return 1;
     }
 
+    // Quick scan all files to detect library types before showing menu
+    for (int i = 0; i < file_count; i++) {
+        lib_types[i] = quick_scan_elf(so_files[i]);
+    }
+
     printf(C_DIM " " UI_SELECT_LIB "\n" C_RST);
     for (int i = 0; i < file_count; i++) {
-        printf(C_CYAN "%d" C_RST " %s\n", i + 1, so_files[i]);
+        printf(C_CYAN "%d" C_RST " %s (" C_PINK "%s" C_RST ")\n", i + 1, so_files[i], lib_type_str[lib_types[i]]);
     }
 
     printf("\n" C_PINK " ➔ " UI_ENTER_NUMBER " " C_DIM "(0 to exit): " C_RST);
@@ -276,13 +457,14 @@ int main() {
     clock_gettime(CLOCK_MONOTONIC, &start_time);
 
     // 2. Execute Native Parser (Super Fast)
+    memset(lib_counts, 0, sizeof(lib_counts));
     process_elf(lib_path);
 
     // 3. Sort results by Class Name
     qsort(symbols, sym_count, sizeof(Symbol), compare_symbols);
 
     // 4. Generate Output File
-    char out_dir[256], out_file[768];
+    char out_dir[512], out_file[1024];
     snprintf(out_dir, sizeof(out_dir), "%s@dump", base_name);
     mkdir(out_dir, 0777); // Create dir
     snprintf(out_file, sizeof(out_file), "%s/%s.cpp", out_dir, base_name);
@@ -292,6 +474,9 @@ int main() {
         printf(C_ERR " Failed to create output file.\n" C_RST);
         return 1;
     }
+
+    // Write detected library type comment
+    fprintf(f_out, "// Detected library type: %s\n\n", lib_type_str[detected_lib]);
 
     const char *current_class = "";
     int class_count = 0;
