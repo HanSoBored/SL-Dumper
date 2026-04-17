@@ -4,23 +4,29 @@ CC = gcc
 CFLAGS = -Wall -Wextra
 LDFLAGS = -lstdc++
 
-TARGET = sl-dumper
+BUILDDIR = build
+TARGET = $(BUILDDIR)/sl-dumper
 SRC = sl-dumper.c
 
 PREFIX ?= /usr/local
 BINDIR = $(PREFIX)/bin
 
-.PHONY: all build clean install uninstall test help
+TEST_SRC = tests/test_sl_dumper.c
+TEST_UNITY = tests/vendor/unity/unity.c
+TEST_BIN = $(BUILDDIR)/test_runner
 
-all: build
+.PHONY: all clean install uninstall test help
 
-build: $(TARGET)
+all: $(TARGET)
 
-$(TARGET): $(SRC)
+$(BUILDDIR):
+	mkdir -p $(BUILDDIR)
+
+$(TARGET): $(SRC) | $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET)
+	rm -rf $(BUILDDIR)
 
 install: $(TARGET)
 	install -d $(BINDIR)
@@ -30,16 +36,17 @@ uninstall:
 	rm -f $(BINDIR)/$(TARGET)
 	@if [ -d $(BINDIR) ] && [ -z "$$(ls -A $(BINDIR))" ]; then rmdir $(BINDIR); fi
 
-test: $(TARGET)
+test: $(TEST_BIN)
 	@echo "Running tests..."
-	$(CC) -std=c99 -o tests/test tests/test.c
-	./tests/test
-	@echo "All tests passed."
+	./$(TEST_BIN)
+
+$(TEST_BIN): $(TEST_SRC) $(TEST_UNITY) $(TARGET) | $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $(TEST_BIN) $(TEST_SRC) $(TEST_UNITY) $(LDFLAGS)
 
 help:
 	@echo "Available targets:"
 	@echo "  build     - Compile sl-dumper (default)"
-	@echo "  clean     - Remove compiled binary"
+	@echo "  clean     - Remove build directory"
 	@echo "  install   - Install to $(BINDIR) (requires sudo)"
 	@echo "  uninstall - Remove from $(BINDIR)"
 	@echo "  test      - Run test suite"

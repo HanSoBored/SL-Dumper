@@ -10,15 +10,9 @@
 #include <sys/mman.h>
 #include <elf.h>
 #include <time.h>
-
-// Untuk Native Demangling (Perlu di-link dengan -lstdc++)
-#ifdef __cplusplus
-extern "C" {
-#endif
-char* __cxa_demangle(const char* mangled_name, char* output_buffer, size_t* length, int* status);
-#ifdef __cplusplus
-}
-#endif
+#include <errno.h>
+// Native demangling (linked with -lstdc++)
+extern char* __cxa_demangle(const char* mangled_name, char* output_buffer, size_t* length, int* status);
 
 // --- UI / UX Colors ---
 #define C_RST   "\x1b[0m"
@@ -74,19 +68,105 @@ static int lib_counts[5] = {0, 0, 0, 0, 0};
 // Library type string mapping
 static const char *lib_type_str[] = {"Unknown", "C++", "Rust", "Go", "Swift"};
 
+// Shared ELF section parsing result
+typedef struct {
+    const uint8_t *symtab;
+    const char *strtab;
+    uint64_t sym_size;
+    uint64_t sym_ent;
+    uint64_t strtab_size;
+    bool is_64;
+    bool found;
+} ElfSections;
+
 void clear_screen() {
     printf("\x1b[1;1H\x1b[2J");
     fflush(stdout);
 }
 
+// Shared ELF section header parsing (M1: deduplicated)
+static bool elf_find_sections(const uint8_t *mem, size_t file_size, ElfSections *out) {
+    memset(out, 0, sizeof(ElfSections));
+
+    bool is_64 = (mem[4] == ELFCLASS64);
+    out->is_64 = is_64;
+
+    Elf64_Ehdr *ehdr64 = (Elf64_Ehdr *)mem;
+    Elf32_Ehdr *ehdr32 = (Elf32_Ehdr *)mem;
+
+    uint64_t shoff = is_64 ? ehdr64->e_shoff : ehdr32->e_shoff;
+    uint16_t shnum = is_64 ? ehdr64->e_shnum : ehdr32->e_shnum;
+
+    // H5: Section header bounds validation
+    size_t shdr_size = is_64 ? sizeof(Elf64_Shdr) : sizeof(Elf32_Shdr);
+    if (shoff + (uint64_t)shnum * shdr_size > (uint64_t)file_size) {
+        return false;
+    }
+
+    // Find Dynamic Symbols Table (.dynsym) and String Table (.dynstr)
+    for (int i = 0; i < shnum; i++) {
+        uint32_t sh_type = is_64
+            ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_type
+            : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_type;
+
+        if (sh_type == SHT_DYNSYM) {
+            out->symtab = mem + (is_64
+                ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_offset
+                : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_offset);
+            out->sym_size = is_64
+                ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_size
+                : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_size;
+            out->sym_ent = is_64
+                ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_entsize
+                : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_entsize;
+
+            uint32_t link = is_64
+                ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_link
+                : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_link;
+
+            // N1: Validate link index bounds (SHN_UNDEF = 0, or malformed ELF)
+            if (link == 0 || link >= shnum) return false;
+
+            out->strtab = (const char *)(mem + (is_64
+                ? ((Elf64_Shdr *)(mem + shoff + link * sizeof(Elf64_Shdr)))->sh_offset
+                : ((Elf32_Shdr *)(mem + shoff + link * sizeof(Elf32_Shdr)))->sh_offset));
+
+            // H4: Capture strtab_size for bounds checking
+            out->strtab_size = is_64
+                ? ((Elf64_Shdr *)(mem + shoff + link * sizeof(Elf64_Shdr)))->sh_size
+                : ((Elf32_Shdr *)(mem + shoff + link * sizeof(Elf32_Shdr)))->sh_size;
+
+            out->found = true;
+            break;
+        }
+    }
+
+    return out->found;
+}
+
 void add_symbol(uint64_t offset, const char *class_name, const char *method_name) {
     if (sym_count >= sym_capacity) {
         sym_capacity = sym_capacity == 0 ? 64 : sym_capacity * 2;
-        symbols = realloc(symbols, sym_capacity * sizeof(Symbol));
+        // H1: Safe realloc with NULL check
+        Symbol *tmp = realloc(symbols, sym_capacity * sizeof(Symbol));
+        if (!tmp) {
+            fprintf(stderr, "Error: Out of memory\n");
+            exit(1);
+        }
+        symbols = tmp;
+    }
+    // N2: Check strdup returns for OOM safety
+    char *cn = strdup(class_name);
+    char *mn = strdup(method_name);
+    if (!cn || !mn) {
+        free(cn);
+        free(mn);
+        fprintf(stderr, "Error: Out of memory\n");
+        exit(1);
     }
     symbols[sym_count].offset = offset;
-    symbols[sym_count].class_name = strdup(class_name);
-    symbols[sym_count].method_name = strdup(method_name);
+    symbols[sym_count].class_name = cn;
+    symbols[sym_count].method_name = mn;
     sym_count++;
 }
 
@@ -149,86 +229,80 @@ void process_elf(const char *lib_path) {
     }
 
     struct stat st;
-    fstat(fd, &st);
+    // M6: Check fstat return value
+    if (fstat(fd, &st) != 0) {
+        perror("fstat failed");
+        close(fd);
+        exit(1);
+    }
+
     uint8_t *mem = (uint8_t *)mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
 
-    // PE/Windows DLL detection
+    // H3: Check mmap result FIRST before dereferencing
+    if (mem == MAP_FAILED) {
+        perror("mmap failed");
+        exit(1);
+    }
+
+    // PE/Windows DLL detection (after mmap check)
     if (mem[0] == 'M' && mem[1] == 'Z') {
         printf(C_ERR " Error: PE/DLL file detected. This tool supports ELF only.\n" C_RST);
         munmap(mem, st.st_size);
         exit(1);
     }
 
-    if (mem == MAP_FAILED || mem[0] != 0x7f || mem[1] != 'E' || mem[2] != 'L' || mem[3] != 'F') {
+    if (mem[0] != 0x7f || mem[1] != 'E' || mem[2] != 'L' || mem[3] != 'F') {
         printf(C_ERR " " UI_NOT_VALID_ELF "\n" C_RST);
+        munmap(mem, st.st_size);
         exit(1);
     }
 
-    bool is_64 = (mem[4] == ELFCLASS64);
-
-    // Pointer ke struktur ELF umum
-    Elf64_Ehdr *ehdr64 = (Elf64_Ehdr *)mem;
-    Elf32_Ehdr *ehdr32 = (Elf32_Ehdr *)mem;
-
-    uint64_t shoff = is_64 ? ehdr64->e_shoff : ehdr32->e_shoff;
-    uint16_t shnum = is_64 ? ehdr64->e_shnum : ehdr32->e_shnum;
-
-    const uint8_t *symtab = NULL;
-    const char *strtab = NULL;
-    uint64_t sym_size = 0, sym_ent = 0;
-
-    // Cari Dynamic Symbols Table (.dynsym) dan String Table (.dynstr)
-    for (int i = 0; i < shnum; i++) {
-        uint32_t sh_type = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_type
-                                 : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_type;
-
-        if (sh_type == SHT_DYNSYM) {
-            symtab = mem + (is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_offset
-                                  : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_offset);
-            sym_size = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_size
-                             : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_size;
-            sym_ent = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_entsize
-                            : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_entsize;
-
-            uint32_t link = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_link
-                                  : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_link;
-
-            strtab = (const char *)(mem + (is_64 ? ((Elf64_Shdr *)(mem + shoff + link * sizeof(Elf64_Shdr)))->sh_offset
-                                                 : ((Elf32_Shdr *)(mem + shoff + link * sizeof(Elf32_Shdr)))->sh_offset));
-            break;
-        }
+    ElfSections sections;
+    if (!elf_find_sections(mem, st.st_size, &sections)) {
+        printf(C_ERR " " UI_NO_SYMBOLS "\n" C_RST);
+        munmap(mem, st.st_size);
+        exit(1);
     }
 
-    if (!symtab || !strtab) {
+    // H5: Division-by-zero guard for sym_ent
+    if (sections.sym_ent == 0) {
         printf(C_ERR " " UI_NO_SYMBOLS "\n" C_RST);
         munmap(mem, st.st_size);
         exit(1);
     }
 
     // Iterate symbols
-    int count = sym_size / sym_ent;
+    int count = sections.sym_size / sections.sym_ent;
     for (int i = 0; i < count; i++) {
         uint64_t st_value;
         uint32_t st_name;
         unsigned char st_info;
 
-        if (is_64) {
-            Elf64_Sym *sym = (Elf64_Sym *)(symtab + i * sym_ent);
+        if (sections.is_64) {
+            Elf64_Sym *sym = (Elf64_Sym *)(sections.symtab + i * sections.sym_ent);
             st_value = sym->st_value;
             st_name = sym->st_name;
             st_info = sym->st_info;
         } else {
-            Elf32_Sym *sym = (Elf32_Sym *)(symtab + i * sym_ent);
+            Elf32_Sym *sym = (Elf32_Sym *)(sections.symtab + i * sections.sym_ent);
             st_value = sym->st_value;
             st_name = sym->st_name;
             st_info = sym->st_info;
         }
 
         if (st_value == 0) continue;
-        if (ELF32_ST_TYPE(st_info) != STT_FUNC && ELF32_ST_TYPE(st_info) != STT_OBJECT) continue;
 
-        const char *name = strtab + st_name;
+        // H2: Use correct ST_TYPE macro for 32/64-bit
+        unsigned char sym_type = sections.is_64
+            ? ELF64_ST_TYPE(st_info)
+            : ELF32_ST_TYPE(st_info);
+        if (sym_type != STT_FUNC && sym_type != STT_OBJECT) continue;
+
+        // H4: strtab bounds check
+        if (st_name >= sections.strtab_size) continue;
+
+        const char *name = sections.strtab + st_name;
 
         // Library type detection based on symbol patterns
         if (strncmp(name, "_Z", 2) == 0) {
@@ -275,69 +349,40 @@ LibraryType quick_scan_elf(const char *lib_path) {
     if (fd < 0) return LIB_UNKNOWN;
 
     struct stat st;
-    fstat(fd, &st);
+    // M6: Check fstat return value
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        return LIB_UNKNOWN;
+    }
+
     uint8_t *mem = (uint8_t *)mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
 
-    if (mem == MAP_FAILED || mem[0] != 0x7f || mem[1] != 'E' || mem[2] != 'L' || mem[3] != 'F') {
+    // H3: Check mmap result FIRST before dereferencing
+    if (mem == MAP_FAILED) {
+        return LIB_UNKNOWN;
+    }
+
+    // ELF magic check (PE files already rejected here — no separate check needed)
+    if (mem[0] != 0x7f || mem[1] != 'E' || mem[2] != 'L' || mem[3] != 'F') {
         munmap(mem, st.st_size);
         return LIB_UNKNOWN;
     }
 
-    // Check for PE/DLL (MZ header) which is not ELF
-    if (mem[0] == 'M' && mem[1] == 'Z') {
-        munmap(mem, st.st_size);
-        return LIB_UNKNOWN;
-    }
-
-    bool is_64 = (mem[4] == ELFCLASS64);
-
-    // Pointer to common ELF structures
-    Elf64_Ehdr *ehdr64 = (Elf64_Ehdr *)mem;
-    Elf32_Ehdr *ehdr32 = (Elf32_Ehdr *)mem;
-
-    uint64_t shoff = is_64 ? ehdr64->e_shoff : ehdr32->e_shoff;
-    uint16_t shnum = is_64 ? ehdr64->e_shnum : ehdr32->e_shnum;
-
-    const uint8_t *symtab = NULL;
-    const char *strtab = NULL;
-    uint64_t sym_size = 0, sym_ent = 0;
-
-    // Find Dynamic Symbols Table (.dynsym) and String Table (.dynstr)
-    for (int i = 0; i < shnum; i++) {
-        uint32_t sh_type = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_type
-                                 : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_type;
-
-        if (sh_type == SHT_DYNSYM) {
-            symtab = mem + (is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_offset
-                                  : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_offset);
-            sym_size = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_size
-                             : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_size;
-            sym_ent = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_entsize
-                            : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_entsize;
-
-            uint32_t link = is_64 ? ((Elf64_Shdr *)(mem + shoff + i * sizeof(Elf64_Shdr)))->sh_link
-                                  : ((Elf32_Shdr *)(mem + shoff + i * sizeof(Elf32_Shdr)))->sh_link;
-
-            strtab = (const char *)(mem + (is_64 ? ((Elf64_Shdr *)(mem + shoff + link * sizeof(Elf64_Shdr)))->sh_offset
-                                                 : ((Elf32_Shdr *)(mem + shoff + link * sizeof(Elf32_Shdr)))->sh_offset));
-            break;
-        }
-    }
-
-    if (!symtab || !strtab) {
+    ElfSections sections;
+    if (!elf_find_sections(mem, st.st_size, &sections)) {
         munmap(mem, st.st_size);
         return LIB_UNKNOWN;
     }
 
     // Avoid division by zero
-    if (sym_ent == 0) {
+    if (sections.sym_ent == 0) {
         munmap(mem, st.st_size);
         return LIB_UNKNOWN;
     }
 
     // Quick scan only first 100 symbols
-    int scan_count = sym_size / sym_ent;
+    int scan_count = sections.sym_size / sections.sym_ent;
     if (scan_count > 100) scan_count = 100;
 
     int quick_counts[5] = {0, 0, 0, 0, 0};
@@ -347,22 +392,30 @@ LibraryType quick_scan_elf(const char *lib_path) {
         uint32_t st_name;
         unsigned char st_info;
 
-        if (is_64) {
-            Elf64_Sym *sym = (Elf64_Sym *)(symtab + i * sym_ent);
+        if (sections.is_64) {
+            Elf64_Sym *sym = (Elf64_Sym *)(sections.symtab + i * sections.sym_ent);
             st_value = sym->st_value;
             st_name = sym->st_name;
             st_info = sym->st_info;
         } else {
-            Elf32_Sym *sym = (Elf32_Sym *)(symtab + i * sym_ent);
+            Elf32_Sym *sym = (Elf32_Sym *)(sections.symtab + i * sections.sym_ent);
             st_value = sym->st_value;
             st_name = sym->st_name;
             st_info = sym->st_info;
         }
 
         if (st_value == 0) continue;
-        if (ELF32_ST_TYPE(st_info) != STT_FUNC && ELF32_ST_TYPE(st_info) != STT_OBJECT) continue;
 
-        const char *name = strtab + st_name;
+        // H2: Use correct ST_TYPE macro for 32/64-bit
+        unsigned char sym_type = sections.is_64
+            ? ELF64_ST_TYPE(st_info)
+            : ELF32_ST_TYPE(st_info);
+        if (sym_type != STT_FUNC && sym_type != STT_OBJECT) continue;
+
+        // H4: strtab bounds check
+        if (st_name >= sections.strtab_size) continue;
+
+        const char *name = sections.strtab + st_name;
 
         // Library type detection based on symbol patterns
         if (strncmp(name, "_Z", 2) == 0) {
@@ -398,20 +451,44 @@ void print_banner() {
     printf("╚════════════════════════════════════════╝\n\n" C_RST);
 }
 
+#ifndef UNITY_TEST
 int main() {
     print_banner();
 
     // 1. Cari File .so di direktori saat ini
-    DIR *d;
-    struct dirent *dir;
-    char *so_files[100];
-    LibraryType lib_types[100];
+    // M3: Dynamic allocation instead of fixed array
+    char **so_files = NULL;
+    LibraryType *lib_types = NULL;
+    int file_capacity = 0;
     int file_count = 0;
 
-    d = opendir(".");
+    DIR *d = opendir(".");
     if (d) {
+        struct dirent *dir;
         while ((dir = readdir(d)) != NULL) {
-            if (strstr(dir->d_name, ".so") != NULL && file_count < 100) {
+            if (strstr(dir->d_name, ".so") != NULL) {
+                if (file_count >= file_capacity) {
+                    file_capacity = file_capacity == 0 ? 64 : file_capacity * 2;
+                    char **tmp_files = realloc(so_files, file_capacity * sizeof(char *));
+                    if (!tmp_files) {
+                        fprintf(stderr, "Error: Out of memory\n");
+                        for (int i = 0; i < file_count; i++) free(so_files[i]);
+                        free(so_files);
+                        free(lib_types);
+                        closedir(d);
+                        return 1;
+                    }
+                    so_files = tmp_files;
+                    LibraryType *tmp_types = realloc(lib_types, file_capacity * sizeof(LibraryType));
+                    if (!tmp_types) {
+                        fprintf(stderr, "Error: Out of memory\n");
+                        for (int i = 0; i < file_count; i++) free(so_files[i]);
+                        free(so_files);
+                        closedir(d);
+                        return 1;
+                    }
+                    lib_types = tmp_types;
+                }
                 so_files[file_count] = strdup(dir->d_name);
                 lib_types[file_count] = LIB_UNKNOWN;
                 file_count++;
@@ -422,6 +499,8 @@ int main() {
 
     if (file_count == 0) {
         printf(C_ERR " " UI_NO_SO_FILES "\n" C_RST);
+        free(so_files);
+        free(lib_types);
         return 1;
     }
 
@@ -440,6 +519,8 @@ int main() {
     if (scanf("%d", &choice) != 1 || choice < 1 || choice > file_count) {
         printf(C_DIM "\n" UI_EXITING "\n" C_RST);
         for (int i = 0; i < file_count; i++) free(so_files[i]);
+        free(so_files);
+        free(lib_types);
         return 0;
     }
 
@@ -451,7 +532,10 @@ int main() {
     base_name[sizeof(base_name) - 1] = '\0';
     char *ext = strrchr(base_name, '.');
     if (ext) *ext = '\0';
-    if (strncmp(base_name, "lib", 3) == 0) memmove(base_name, base_name + 3, strlen(base_name) - 2);
+    // L2: Fix memmove length calculation
+    if (strncmp(base_name, "lib", 3) == 0) {
+        memmove(base_name, base_name + 3, strlen(base_name + 3) + 1);
+    }
 
     print_banner();
     printf(C_CYAN "" C_RST " " UI_PROCESSING " " C_BOLD "%s" C_RST "...\n", lib_path);
@@ -469,12 +553,34 @@ int main() {
     // 4. Generate Output File
     char out_dir[512], out_file[1024];
     snprintf(out_dir, sizeof(out_dir), "%s@dump", base_name);
-    mkdir(out_dir, 0777); // Create dir
+    // M5 + L3: Check mkdir return value with proper permissions
+    if (mkdir(out_dir, 0755) != 0 && errno != EEXIST) {
+        perror("Failed to create output directory");
+        // Cleanup
+        for (size_t i = 0; i < sym_count; i++) {
+            free(symbols[i].class_name);
+            free(symbols[i].method_name);
+        }
+        free(symbols);
+        for (int i = 0; i < file_count; i++) free(so_files[i]);
+        free(so_files);
+        free(lib_types);
+        return 1;
+    }
     snprintf(out_file, sizeof(out_file), "%s/%s.cpp", out_dir, base_name);
 
     FILE *f_out = fopen(out_file, "w");
     if (!f_out) {
         printf(C_ERR " Failed to create output file.\n" C_RST);
+        // Cleanup
+        for (size_t i = 0; i < sym_count; i++) {
+            free(symbols[i].class_name);
+            free(symbols[i].method_name);
+        }
+        free(symbols);
+        for (int i = 0; i < file_count; i++) free(so_files[i]);
+        free(so_files);
+        free(lib_types);
         return 1;
     }
 
@@ -515,6 +621,9 @@ int main() {
 
     // Cleanup so_files
     for (int i = 0; i < file_count; i++) free(so_files[i]);
+    free(so_files);
+    free(lib_types);
 
     return 0;
 }
+#endif
