@@ -4,8 +4,10 @@
 #include <sys/stat.h>
 #include "vendor/unity/unity.h"
 
+#ifndef UNITY_TEST
 #define UNITY_TEST
-#include "../src/sl-dumper.c"
+#endif
+#include "../src/sl-dumper.c" // NOLINT(bugprone-suspicious-include)
 
 static const char *TEST_SO_FILE = "lib/libcocos2dlua.so";
 
@@ -86,7 +88,7 @@ void test_add_symbol_grows_capacity(void) {
     for (int i = 0; i < 100; i++) {
         char name[16];
         snprintf(name, sizeof(name), "Method%d", i);
-        add_symbol(i * 0x100, "BigClass", name);
+        add_symbol((uint64_t)i * 0x100, "BigClass", name);
     }
     TEST_ASSERT_EQUAL(100, sym_count);
     TEST_ASSERT_GREATER_OR_EQUAL(100, sym_capacity);
@@ -282,7 +284,7 @@ void test_output_contains_class_structure(void) {
 
     write_output_file("test_structure");
 
-    FILE *f = fopen("test_structure@dump/test_structure.cpp", "r");
+    FILE *f = fopen("lib/output/test_structure@dump/test_structure.cpp", "r");
     TEST_ASSERT_NOT_NULL(f);
 
     char buf[4096];
@@ -306,7 +308,7 @@ void test_output_contains_offsets(void) {
 
     write_output_file("test_offsets");
 
-    FILE *f = fopen("test_offsets@dump/test_offsets.cpp", "r");
+    FILE *f = fopen("lib/output/test_offsets@dump/test_offsets.cpp", "r");
     TEST_ASSERT_NOT_NULL(f);
 
     char buf[1024];
