@@ -1,8 +1,8 @@
-# 🧬 C++ Dumper
+# 🧬 SL-Dumper
 
-> Fast ELF symbol parser & class dumper for C++ shared libraries (.so)
+> Fast ELF symbol parser & class dumper for shared libraries (.so)
 
-C++ Dumper is a lightweight tool written in C that scans ELF binaries (`.so` files), demangles C++ symbol names, and generates a structured class dump in a `.cpp` file. It uses **native ELF parsing** and the **Itanium C++ ABI demangler** for maximum speed and accuracy.
+SL-Dumper (Shared Library Dumper) is a lightweight tool written in C that scans ELF binaries (`.so` files), demangles symbol names, and generates a structured class dump in a `.cpp` file. It auto-detects library type (C++, Rust, Go, Swift) and uses **native ELF parsing** for maximum speed.
 
 ---
 
@@ -30,20 +30,18 @@ C++ Dumper is a lightweight tool written in C that scans ELF binaries (`.so` fil
 Clone the repository:
 
 ```bash
-git clone https://github.com/HanSoBored/cpp-dumper.git
-cd cpp-dumper
+git clone https://github.com/HanSoBored/SL-Dumper.git
+cd SL-Dumper
 ```
 Compile the program with:
 
 ```bash
-clang -O3 cpp-dumper.c -o cpp-dumper -lstdc++
+make
 ```
-
-> **Note:** The `-lstdc++` flag is required for `__cxa_demangle`. If 
 
 Move the compiled binary to a global location:
 ```bash
-sudo mv cpp-dumper /usr/local/bin/
+sudo make install
 ```
 
 ---
@@ -52,13 +50,13 @@ sudo mv cpp-dumper /usr/local/bin/
 
 1. Navigate to a directory containing `.so` files and run:
    ```bash
-   cpp-dumper
+   sl-dumper
    ```
 2. You will see a list of available `.so` files:
    ```
    Select Library to dump:
-   1 libexample.so
-   2 libother.so
+   1 libexample.so (C++)
+   2 libother.so (Rust)
 
    ➔ Enter number (0 to exit):
    ```
@@ -97,11 +95,11 @@ Each method is listed with its **virtual memory offset** (hex) as found in the d
 
 ```
 .
-├── cpp_dumper          # Compiled executable
-├── libexample.so       # Shared library to dump
-├── libother.so         # Another library
-└── example@dump/       # Output folder
-    └── example.cpp     # Dumped class definitions
+├── sl-dumper          # Compiled executable
+├── libexample.so     # Shared library to dump
+├── libother.so       # Another library
+└── example@dump/   # Output folder
+    └── example.cpp # Dumped class definitions
 ```
 
 ---

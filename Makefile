@@ -1,11 +1,11 @@
-# cpp-dumper Makefile
+# SL-Dumper Makefile
 
 CC = gcc
 CFLAGS = -Wall -Wextra
 LDFLAGS = -lstdc++
 
-TARGET = cpp-dumper
-SRC = cpp-dumper.c
+TARGET = sl-dumper
+SRC = sl-dumper.c
 
 PREFIX ?= /usr/local
 BINDIR = $(PREFIX)/bin
@@ -30,14 +30,15 @@ uninstall:
 	rm -f $(BINDIR)/$(TARGET)
 	@if [ -d $(BINDIR) ] && [ -z "$$(ls -A $(BINDIR))" ]; then rmdir $(BINDIR); fi
 
-test:
+test: $(TARGET)
 	@echo "Running tests..."
-	@bash tests/test_build.sh && echo "Build test: PASSED" || (echo "Build test: FAILED" && exit 1)
+	$(CC) -std=c99 -o tests/test tests/test.c
+	./tests/test
 	@echo "All tests passed."
 
 help:
 	@echo "Available targets:"
-	@echo "  build     - Compile cpp-dumper (default)"
+	@echo "  build     - Compile sl-dumper (default)"
 	@echo "  clean     - Remove compiled binary"
 	@echo "  install   - Install to $(BINDIR) (requires sudo)"
 	@echo "  uninstall - Remove from $(BINDIR)"

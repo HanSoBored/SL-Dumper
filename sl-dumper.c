@@ -235,10 +235,13 @@ void process_elf(const char *lib_path) {
             lib_counts[LIB_CXX]++;  // C++ mangled symbol
         } else if (strncmp(name, "rust_", 5) == 0) {
             lib_counts[LIB_RUST]++;  // Rust symbol
+            // TODO: Implement Rust symbol dumping (e.g., rust_oom_hook, core::, alloc::)
         } else if (strncmp(name, "runtime.", 8) == 0 || strncmp(name, "go.", 3) == 0) {
             lib_counts[LIB_GO]++;  // Go symbol
+            // TODO: Implement Go symbol dumping (e.g., runtime.makeslice, go.buildid)
         } else if (strncmp(name, "$s", 2) == 0 || strncmp(name, "swift_", 6) == 0) {
             lib_counts[LIB_SWIFT]++;  // Swift symbol
+            // TODO: Implement Swift symbol dumping (e.g., $s4main, swift_autoreleasePool)
         }
 
         // Demangle and store C++ symbols
@@ -391,7 +394,7 @@ LibraryType quick_scan_elf(const char *lib_path) {
 
 void print_banner() {
     printf(C_CYAN "\n╔════════════════════════════════════════╗\n");
-    printf("║   C++ Native Dumper - Fast ELF Parser  ║\n");
+    printf("║   SL-Dumper - Fast ELF Library Parser  ║\n");
     printf("╚════════════════════════════════════════╝\n\n" C_RST);
 }
 
