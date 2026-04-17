@@ -7,3 +7,5 @@ lib/*.so
 
 # Dump output
 *@dump/
+
+.clang-tidy
