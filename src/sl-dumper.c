@@ -556,7 +556,7 @@ int main() {
 
     // Membersihkan string untuk nama folder/file
     char base_name[256];
-    strncpy(base_name, lib_path, sizeof(base_name) - 1);
+    strncpy(base_name, so_files[choice - 1], sizeof(base_name) - 1);
     base_name[sizeof(base_name) - 1] = '\0';
     char *ext = strrchr(base_name, '.');
     if (ext) *ext = '\0';
@@ -580,7 +580,7 @@ int main() {
 
     // 4. Generate Output File
     char out_dir[512], out_file[1024];
-    snprintf(out_dir, sizeof(out_dir), "%s@dump", base_name);
+    snprintf(out_dir, sizeof(out_dir), "lib/output/%s@dump", base_name);
     // M5 + L3: Check mkdir return value with proper permissions
     if (mkdir(out_dir, 0755) != 0 && errno != EEXIST) {
         perror("Failed to create output directory");
