@@ -57,7 +57,9 @@ static void add_symbol(uint64_t offset, const char *class_name, const char *meth
 static int compare_symbols(const void *a, const void *b);
 static void parse_and_store_demangled(uint64_t offset, const char *demangled);
 static void process_elf(const char *lib_path);
+#ifndef UNITY_TEST
 static void print_banner(void);
+#endif
 
 typedef struct {
     uint64_t offset;
@@ -449,11 +451,13 @@ static LibraryType quick_scan_elf(const char *lib_path) {
     return LIB_UNKNOWN;
 }
 
+#ifndef UNITY_TEST
 static void print_banner(void) {
     printf(C_CYAN "\n╔════════════════════════════════════════╗\n");
     printf("║   SL-Dumper - Fast ELF Library Parser  ║\n");
     printf("╚════════════════════════════════════════╝\n\n" C_RST);
 }
+#endif
 
 #ifndef UNITY_TEST
 

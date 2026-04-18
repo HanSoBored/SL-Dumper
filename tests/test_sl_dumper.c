@@ -52,21 +52,21 @@ void tearDown(void) {
  * Unit Tests: compare_symbols
  * ============================================================ */
 
-void test_compare_symbols_different_class(void) {
+static void test_compare_symbols_different_class(void) {
     Symbol a = { .offset = 100, .class_name = "ZClassB", .method_name = "foo" };
     Symbol b = { .offset = 200, .class_name = "ZClassA", .method_name = "bar" };
     TEST_ASSERT_GREATER_THAN(0, compare_symbols(&a, &b));
     TEST_ASSERT_LESS_THAN(0, compare_symbols(&b, &a));
 }
 
-void test_compare_symbols_same_class_different_offset(void) {
+static void test_compare_symbols_same_class_different_offset(void) {
     Symbol a = { .offset = 100, .class_name = "ZClassA", .method_name = "foo" };
     Symbol b = { .offset = 200, .class_name = "ZClassA", .method_name = "bar" };
     TEST_ASSERT_LESS_THAN(0, compare_symbols(&a, &b));
     TEST_ASSERT_GREATER_THAN(0, compare_symbols(&b, &a));
 }
 
-void test_compare_symbols_same_class_same_offset(void) {
+static void test_compare_symbols_same_class_same_offset(void) {
     Symbol a = { .offset = 100, .class_name = "ZClassA", .method_name = "foo" };
     Symbol b = { .offset = 100, .class_name = "ZClassA", .method_name = "bar" };
     TEST_ASSERT_EQUAL(0, compare_symbols(&a, &b));
@@ -76,13 +76,13 @@ void test_compare_symbols_same_class_same_offset(void) {
  * Unit Tests: add_symbol
  * ============================================================ */
 
-void test_add_symbol_initial_state(void) {
+static void test_add_symbol_initial_state(void) {
     TEST_ASSERT_NULL(symbols);
     TEST_ASSERT_EQUAL(0, sym_count);
     TEST_ASSERT_EQUAL(0, sym_capacity);
 }
 
-void test_add_symbol_single(void) {
+static void test_add_symbol_single(void) {
     add_symbol(0x1000, "TestClass", "methodA");
     TEST_ASSERT_EQUAL(1, sym_count);
     TEST_ASSERT_EQUAL_STRING("TestClass", symbols[0].class_name);
@@ -90,7 +90,7 @@ void test_add_symbol_single(void) {
     TEST_ASSERT_EQUAL_HEX(0x1000, symbols[0].offset);
 }
 
-void test_add_symbol_multiple(void) {
+static void test_add_symbol_multiple(void) {
     add_symbol(0x1000, "ClassA", "method1");
     add_symbol(0x2000, "ClassB", "method2");
     add_symbol(0x3000, "ClassA", "method3");
@@ -101,7 +101,7 @@ void test_add_symbol_multiple(void) {
     TEST_ASSERT_EQUAL_STRING("ClassA", symbols[2].class_name);
 }
 
-void test_add_symbol_grows_capacity(void) {
+static void test_add_symbol_grows_capacity(void) {
     for (int i = 0; i < 100; i++) {
         char name[16];
         snprintf(name, sizeof(name), "Method%d", i);
@@ -115,45 +115,45 @@ void test_add_symbol_grows_capacity(void) {
  * Unit Tests: parse_and_store_demangled
  * ============================================================ */
 
-void test_parse_and_store_demangled_simple_method(void) {
+static void test_parse_and_store_demangled_simple_method(void) {
     parse_and_store_demangled(0x1000, "MyClass::doSomething(int, char*)");
     TEST_ASSERT_EQUAL(1, sym_count);
     TEST_ASSERT_EQUAL_STRING("MyClass", symbols[0].class_name);
     TEST_ASSERT_EQUAL_STRING("doSomething(int, char*)", symbols[0].method_name);
 }
 
-void test_parse_and_store_demangled_no_params(void) {
+static void test_parse_and_store_demangled_no_params(void) {
     parse_and_store_demangled(0x1000, "MyClass::doSomething");
     TEST_ASSERT_EQUAL(0, sym_count);
 }
 
-void test_parse_and_store_demangled_not_a_method(void) {
+static void test_parse_and_store_demangled_not_a_method(void) {
     parse_and_store_demangled(0x1000, "some_function(int)");
     TEST_ASSERT_EQUAL(0, sym_count);
 }
 
-void test_parse_and_store_demangled_with_template(void) {
+static void test_parse_and_store_demangled_with_template(void) {
     parse_and_store_demangled(0x1000, "Vector<int>::push_back(int const&)");
     TEST_ASSERT_EQUAL(1, sym_count);
     TEST_ASSERT_EQUAL_STRING("Vector<int>", symbols[0].class_name);
     TEST_ASSERT_EQUAL_STRING("push_back(int const&)", symbols[0].method_name);
 }
 
-void test_parse_and_store_demangled_nested_namespace(void) {
+static void test_parse_and_store_demangled_nested_namespace(void) {
     parse_and_store_demangled(0x1000, "ns::inner::Foo::bar(std::string)");
     TEST_ASSERT_EQUAL(1, sym_count);
     TEST_ASSERT_EQUAL_STRING("ns::inner::Foo", symbols[0].class_name);
     TEST_ASSERT_EQUAL_STRING("bar(std::string)", symbols[0].method_name);
 }
 
-void test_parse_and_store_demangled_constructor(void) {
+static void test_parse_and_store_demangled_constructor(void) {
     parse_and_store_demangled(0x1000, "MyClass::MyClass(int)");
     TEST_ASSERT_EQUAL(1, sym_count);
     TEST_ASSERT_EQUAL_STRING("MyClass", symbols[0].class_name);
     TEST_ASSERT_EQUAL_STRING("MyClass(int)", symbols[0].method_name);
 }
 
-void test_parse_and_store_demangled_destructor(void) {
+static void test_parse_and_store_demangled_destructor(void) {
     parse_and_store_demangled(0x1000, "MyClass::~MyClass()");
     TEST_ASSERT_EQUAL(1, sym_count);
     TEST_ASSERT_EQUAL_STRING("MyClass", symbols[0].class_name);
@@ -164,12 +164,12 @@ void test_parse_and_store_demangled_destructor(void) {
  * Unit Tests: quick_scan_elf
  * ============================================================ */
 
-void test_quick_scan_nonexistent_file(void) {
+static void test_quick_scan_nonexistent_file(void) {
     LibraryType result = quick_scan_elf("nonexistent_file.so");
     TEST_ASSERT_EQUAL(LIB_UNKNOWN, result);
 }
 
-void test_quick_scan_real_elf(void) {
+static void test_quick_scan_real_elf(void) {
     struct stat st;
     if (stat(TEST_SO_FILE, &st) != 0) {
         TEST_IGNORE_MESSAGE("Test .so file not found, skipping");
@@ -178,7 +178,7 @@ void test_quick_scan_real_elf(void) {
     TEST_ASSERT_NOT_EQUAL(LIB_UNKNOWN, result);
 }
 
-void test_quick_scan_cpp_symbols_detected(void) {
+static void test_quick_scan_cpp_symbols_detected(void) {
     struct stat st;
     if (stat(TEST_SO_FILE, &st) != 0) {
         TEST_IGNORE_MESSAGE("Test .so file not found, skipping");
@@ -191,7 +191,7 @@ void test_quick_scan_cpp_symbols_detected(void) {
  * Integration Tests: process_elf with real ELF
  * ============================================================ */
 
-void test_process_elf_real_file(void) {
+static void test_process_elf_real_file(void) {
     struct stat st;
     if (stat(TEST_SO_FILE, &st) != 0) {
         TEST_IGNORE_MESSAGE("Test .so file not found, skipping");
@@ -200,7 +200,7 @@ void test_process_elf_real_file(void) {
     TEST_ASSERT(sym_count > 0);
 }
 
-void test_process_elf_populates_symbols(void) {
+static void test_process_elf_populates_symbols(void) {
     struct stat st;
     if (stat(TEST_SO_FILE, &st) != 0) {
         TEST_IGNORE_MESSAGE("Test .so file not found, skipping");
@@ -216,7 +216,7 @@ void test_process_elf_populates_symbols(void) {
     }
 }
 
-void test_process_elf_detects_library_type(void) {
+static void test_process_elf_detects_library_type(void) {
     struct stat st;
     if (stat(TEST_SO_FILE, &st) != 0) {
         TEST_IGNORE_MESSAGE("Test .so file not found, skipping");
@@ -225,7 +225,7 @@ void test_process_elf_detects_library_type(void) {
     TEST_ASSERT_NOT_EQUAL(LIB_UNKNOWN, detected_lib);
 }
 
-void test_process_elf_symbols_have_valid_offsets(void) {
+static void test_process_elf_symbols_have_valid_offsets(void) {
     struct stat st;
     if (stat(TEST_SO_FILE, &st) != 0) {
         TEST_IGNORE_MESSAGE("Test .so file not found, skipping");
@@ -253,14 +253,12 @@ static void write_output_file(const char *base_name) {
     fprintf(f_out, "// Detected library type: %s\n\n", lib_type_str[detected_lib]);
 
     const char *current_class = "";
-    int class_count = 0;
 
     for (size_t i = 0; i < sym_count; i++) {
         if (strcmp(symbols[i].class_name, current_class) != 0) {
             if (i > 0) fprintf(f_out, "};\n\n");
             fprintf(f_out, "class %s {\n", symbols[i].class_name);
             current_class = symbols[i].class_name;
-            class_count++;
         }
         fprintf(f_out, "      %s; // 0x%lx\n", symbols[i].method_name, (unsigned long)symbols[i].offset);
     }
@@ -268,7 +266,7 @@ static void write_output_file(const char *base_name) {
     fclose(f_out);
 }
 
-void test_output_file_generated(void) {
+static void test_output_file_generated(void) {
     struct stat st;
     if (stat(TEST_SO_FILE, &st) != 0) {
         TEST_IGNORE_MESSAGE("Test .so file not found, skipping");
@@ -288,7 +286,7 @@ void test_output_file_generated(void) {
     rmdir("lib/output/test_output@dump");
 }
 
-void test_output_contains_class_structure(void) {
+static void test_output_contains_class_structure(void) {
     struct stat st;
     if (stat(TEST_SO_FILE, &st) != 0) {
         TEST_IGNORE_MESSAGE("Test .so file not found, skipping");
@@ -319,7 +317,7 @@ void test_output_contains_class_structure(void) {
     rmdir("lib/output/test_structure@dump");
 }
 
-void test_output_contains_offsets(void) {
+static void test_output_contains_offsets(void) {
     add_symbol(0xDEAD, "Foo", "bar()");
     detected_lib = LIB_CXX;
 
